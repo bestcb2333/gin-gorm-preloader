@@ -2,34 +2,47 @@ package preloader
 
 import (
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
+type PreloadField struct {
+	Name   string
+	Fields []string
+}
+
 func CreateGetHandler[T any, U any](
-	cfg *Config[struct{}],
-	queryFunc func(q *gorm.DB, c *gin.Context, u *U) *gorm.DB,
+	cfg *Config,
+	opt *Option,
+	preloads []PreloadField,
+	selects []string,
 ) gin.HandlerFunc {
-	cfg.Bind = &BindConfig{Query: true}
+	opt.Bind = &BindOption{Query: true}
 	return Preload(
 		cfg,
+		opt,
+		&struct{}{},
 		func(c *gin.Context, u *U, r *struct{}) {
 
-			q := cfg.Base.DB.Model(new(T))
+			q := cfg.DB.Model(new(T))
 
-			q = queryFunc(q, c, u)
-			if q == nil {
-				return
+			for _, preload := range preloads {
+				q = q.Preload(preload.Name, Select(preload.Fields...))
 			}
 
 			id := c.Param("id")
 
+			if selects != nil {
+				for _, sel := range selects {
+					q = q.Select(sel)
+				}
+			}
+
 			var data T
 			if err := q.First(&data, "id = ?", id).Error; err != nil {
-				c.JSON(500, cfg.Base.RespFunc("查询失败", err, nil))
+				cfg.Logger.Resp(c, 500, "查询失败", err, nil)
 				return
 			}
 
-			c.JSON(200, cfg.Base.RespFunc("数据查询成功", nil, &data))
+			cfg.Logger.Resp(c, 200, "数据查询成功", nil, &data)
 		},
 	)
 }
