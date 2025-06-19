@@ -18,7 +18,7 @@ const (
 )
 
 type Logger interface {
-	Resp(c *gin.Context, code int, msg string, err error, data any)
+	Resp(c *gin.Context, code int, msg string, err error)
 }
 
 type Config struct {
@@ -31,17 +31,19 @@ type Config struct {
 }
 
 type Option struct {
-	Bind       *BindOption
+	Bind       BindOption
 	Permission Permission
 	Tables     []string
 }
 
-type BindOption struct {
-	Param     bool
-	Query     bool
-	JSON      bool
-	Multipart bool
-}
+type BindOption uint32
+
+const (
+	Uri BindOption = 1 << iota
+	Query
+	JSON
+	Multipart
+)
 
 func Preload[R any, U any](
 	cfg *Config,
@@ -61,7 +63,7 @@ func Preload[R any, U any](
 		if opt.Permission >= Login {
 			rawToken := c.GetHeader("Authorization")
 			if len(rawToken) < 8 {
-				cfg.Logger.Resp(c, 400, "token无效", nil, nil)
+				cfg.Logger.Resp(c, 400, "token无效", nil)
 				return
 			}
 
@@ -74,22 +76,24 @@ func Preload[R any, U any](
 				},
 			)
 			if err != nil {
-				cfg.Logger.Resp(c, 400, "token秘钥不正确", err, nil)
+				cfg.Logger.Resp(c, 400, "token秘钥不正确", err)
 				return
 			}
 
 			claims, ok := jwtToken.Claims.(jwt.MapClaims)
 			if !ok || !jwtToken.Valid {
-				cfg.Logger.Resp(c, 400, "token格式不正确", nil, nil)
+				cfg.Logger.Resp(c, 400, "token格式不正确", nil)
 				return
 			}
 
 			userId := uint(claims["userId"].(float64))
 
+			c.Set("userId", userId)
+
 			newToken, err := GetJwt(userId, cfg.JWTKey, cfg.JWTExpiry)
 
 			if err != nil {
-				cfg.Logger.Resp(c, 400, "生成新token失败", err, nil)
+				cfg.Logger.Resp(c, 400, "生成新token失败", err)
 				return
 			}
 			c.Header("Authorization", newToken)
@@ -99,12 +103,12 @@ func Preload[R any, U any](
 
 			var admin bool
 			if err := query.Select(cfg.AdminColName).Scan(&admin).Error; err != nil {
-				cfg.Logger.Resp(c, 500, "没有admin字段", err, nil)
+				cfg.Logger.Resp(c, 500, "没有admin字段", err)
 				return
 			}
 
 			if opt.Permission >= Admin && !admin {
-				cfg.Logger.Resp(c, 403, "你不是管理员", nil, nil)
+				cfg.Logger.Resp(c, 403, "你不是管理员", nil)
 				return
 			}
 
@@ -117,45 +121,49 @@ func Preload[R any, U any](
 			if err := query.First(&user).Error; errors.Is(
 				err, gorm.ErrRecordNotFound,
 			) {
-				cfg.Logger.Resp(c, 400, "用户不存在", err, nil)
+				cfg.Logger.Resp(c, 400, "用户不存在", err)
 				return
 			} else if err != nil {
-				cfg.Logger.Resp(c, 500, "查询用户失败", err, nil)
+				cfg.Logger.Resp(c, 500, "查询用户失败", err)
 				return
 			}
 
 			u = &user
 		}
 
-		if opt.Bind != nil && defReq != nil {
+		if opt.Bind != 0 {
 
-			temp := *defReq
-			req = &temp
+			if defReq != nil {
+				temp := *defReq
+				req = &temp
+			} else {
+				req = new(R)
+			}
 
-			if opt.Bind.Param {
+			if opt.Bind&Uri != 0 {
 				if err := c.ShouldBindUri(req); err != nil {
-					cfg.Logger.Resp(c, 400, "路径参数有误", err, nil)
+					cfg.Logger.Resp(c, 400, "路径参数有误", err)
 					return
 				}
 			}
 
-			if opt.Bind.Query {
+			if opt.Bind&Query != 0 {
 				if err := c.ShouldBindQuery(req); err != nil {
-					cfg.Logger.Resp(c, 400, "查询字符串参数有误", err, nil)
+					cfg.Logger.Resp(c, 400, "查询字符串参数有误", err)
 					return
 				}
 			}
 
-			if opt.Bind.JSON {
+			if opt.Bind&JSON != 0 {
 				if err := c.ShouldBindJSON(req); err != nil {
-					cfg.Logger.Resp(c, 400, "请求体格式有误", err, nil)
+					cfg.Logger.Resp(c, 400, "请求体格式有误", err)
 					return
 				}
 			}
 
-			if opt.Bind.Multipart {
+			if opt.Bind&Multipart != 0 {
 				if err := c.ShouldBind(req); err != nil {
-					cfg.Logger.Resp(c, 400, "请求表单格式有误", err, nil)
+					cfg.Logger.Resp(c, 400, "请求表单格式有误", err)
 					return
 				}
 			}
